@@ -23,6 +23,7 @@ import torch
 import torch.nn as nn
 import numpy as np
 from torch import autograd
+import pdb
 
 def parse_args(args=None, namespace=None):
     """
@@ -63,8 +64,8 @@ def parse_args(args=None, namespace=None):
     parser.add_argument('--manual-seed', type=int, default=0, help='manual random seed')
 
     # train hyper-parameters
-    parser.add_argument('--max-step', help='maximum step', default=10000, type=int)
-    parser.add_argument('--early-stop-step', help='early stop step', default=10000, type=int)
+    parser.add_argument('--max-step', help='maximum step', default=5000, type=int)
+    parser.add_argument('--early-stop-step', help='early stop step', default=5000, type=int)
     parser.add_argument('--warmup-learning-rate', '-wlr', help='warmup learning rate', default=5e-6, type=float)
     parser.add_argument('--warmup-step', type=int, default=20000, help='warm-up iterations')
     parser.add_argument('--optimizer', help='[Adam/SGD]', default='Adam', type=str)
@@ -76,10 +77,13 @@ def parse_args(args=None, namespace=None):
     parser.add_argument('--base-weight-factor', help='reduce base_weight learning rate by the factor value',
                         default=0.1, type=float)
 
+    # irm parameters
     parser.add_argument('--weight-source-irm', type=float, default=0.0)
     parser.add_argument('--weight-target-irm', type=float, default=0.0)
     parser.add_argument('--weight-irm', type=float, default=0.0)
     parser.add_argument('--iters-active-irm', type=int, default=1)
+    parser.add_argument('--layer-irm', type=int, default=6)
+
     # trainval parameters
     parser.add_argument('--adaptation-gamma', help='adaptation gamma value', default=10, type=float)
     parser.add_argument('--adv-loss', help='add domain loss', action='store_true')
@@ -105,18 +109,16 @@ def parse_args(args=None, namespace=None):
     args = parser.parse_args(args=args, namespace=namespace)
     return args
 
-def penalty(logits, y):
-    scale = torch.tensor(1.).cuda().requires_grad_()
-    loss = mean_nll(logits * scale, y)
-    grad = autograd.grad(loss, [scale], create_graph=True)[0]
-    return torch.sum(grad**2)
 
-def feature_penalty(feature, classifier, loss_func, y):
-    #scale = torch.ones((1, feature.size(-1))).cuda().requires_grad_()
-    scale = torch.tensor(1.).cuda().requires_grad_()
-    logits = classifier(feature * scale)
+def penalty_loss_scales(loss, scale):
+    grads = autograd.grad(loss, scale, create_graph=True, allow_unused=True)
+    pdb.set_trace()
+    return list(map(lambda x: torch.sum(x ** 2), grads))
+
+def feature_penalty(logits, scalars, loss_func, y):
     loss = loss_func(logits, y)
-    grad = autograd.grad(loss, [scale], create_graph=True)[0]
+    grad = autograd.grad(loss, scalars, create_graph=True)[0]
+    #pdb.set_trace()
     return torch.sum(grad**2)
 
 # def feature_penalty(feature, classifier, loss_func, y):
@@ -163,6 +165,8 @@ def main():
             args.num_classes = 10
         else:
             raise AttributeError('Wrong num_classes: {}'.format(args.num_classes))
+
+    with_scalar = [args.layer_irm]
 
     if args.weight_irm > 0.0:
         args.weight_source_irm = args.weight_irm
@@ -394,6 +398,9 @@ def main():
         ########################################################################################################
         #                                               Train G                                                #
         ########################################################################################################
+        scalar_source = []
+        scalar_target = []
+
         if args.adv_loss:
             for discriminator in discriminators:
                 for param in discriminator.parameters():
@@ -415,31 +422,43 @@ def main():
                                     with_ft=True)
                 trg_preds.append((pred_t, f_t))
         else:
-            src_preds = []
-            for src_idx, (x_s, y_s) in enumerate(src_inputs):
-                pred_s, f_s = model(x_s, with_ft=True)
-                src_preds.append((pred_s, f_s))
+            if(args.weight_source_irm > 0):
+                src_preds = []
+                for src_idx, (x_s, y_s) in enumerate(src_inputs):
+                    pred_s, f_s, r_s = model(x_s, with_ft=True, with_scalar=with_scalar)
+                    src_preds.append((pred_s, f_s))
+                    scalar_source = scalar_source + r_s
 
-            trg_preds = []
-            for trg_idx, (x_t, _) in enumerate(trg_inputs, num_source_domains):
-                pred_t, f_t = model(x_t, with_ft=True)
-                trg_preds.append((pred_t, f_t))
+                trg_preds = []
+                for trg_idx, (x_t, _) in enumerate(trg_inputs, num_source_domains):
+                    pred_t, f_t, r_t = model(x_t, with_ft=True, with_scalar=with_scalar)
+                    trg_preds.append((pred_t, f_t))
+                    scalar_target = scalar_target + r_t
+
+            else:
+                src_preds = []
+                for src_idx, (x_s, y_s) in enumerate(src_inputs):
+                    pred_s, f_s = model(x_s, with_ft=True)
+                    src_preds.append((pred_s, f_s))
+
+                trg_preds = []
+                for trg_idx, (x_t, _) in enumerate(trg_inputs, num_source_domains):
+                    pred_t, f_t = model(x_t, with_ft=True)
+                    trg_preds.append((pred_t, f_t))
 
         Closs_src = 0
-        Closs_src_irm = 0
-        for (_, y_s), (pred_s, f_s) in zip(src_inputs, src_preds):
-            Closs_src = Closs_src + ce_loss(pred_s, y_s) / float(num_source_domains)
-
-            if(args.weight_source_irm > 0):
-                Closs_src_irm += feature_penalty(f_s, model.fc, ce_loss, y_s)
+        # Closs_src_irm = 0
+        # if(args.weight_source_irm > 0):        
+        #     for (_, y_s), (pred_s, f_s, r_s) in zip(src_inputs, src_preds):
+        #         Closs_src = Closs_src + ce_loss(pred_s, y_s) / float(num_source_domains)
+        #         Closs_src_irm += feature_penalty(pred_s, r_s, ce_loss, y_s)
                 
+        #else:
+        for (_, y_s), (pred_s, f_s) in zip(src_inputs, src_preds):
+            Closs_src = Closs_src + ce_loss(pred_s, y_s) / float(num_source_domains)                
 
         monitor.update({"Loss/Closs_src": float(Closs_src)})
         Floss = Closs_src
-
-        if(args.weight_source_irm > 0):
-            Floss += Closs_src_irm * args.weight_source_irm
-            monitor.update({"Loss/Closs_src_irm": float(Closs_src_irm)})
 
         if args.adv_loss:
             # adversarial loss
@@ -495,19 +514,10 @@ def main():
                     pred_t_pseudos.append(pred_t_pseudo)
                 model.train(True)
 
-        if(args.weight_target_irm > 0):
-            Closs_trg_irm = 0
-            #Closs_trg = 0
-            for pred_t_pseudo, (pred_t, f_t) in zip(pred_t_pseudos, trg_preds):
-                y_t_pseudo = torch.argmax(pred_t_pseudo, 1).detach()
-                #Closs_trg = Closs_trg + ce_loss(pred_t, y_t_pseudo)
-                Closs_trg_irm += feature_penalty(f_t, model.fc, ce_loss, y_t_pseudo)
-
-            #Floss += Closs_trg
-            Floss += Closs_trg_irm * args.weight_target_irm
-            
-            monitor.update({"Loss/Closs_trg_irm": float(Closs_trg_irm)})
-            #monitor.update({"Loss/Closs_trg": float(Closs_trg_irm)})
+        # if(args.weight_target_irm > 0):
+        #     Closs_trg_irm = 0
+        #     for pred_t_pseudo, (x_t, f_t, r_t) in zip(pred_t_pseudos, trg_preds):
+        #         Closs_trg_irm += feature_penalty(x_t, r_t, ce_loss, torch.argmax(pred_t_pseudo, 1).detach())
 
         # moving semantic loss
         if args.sm_loss:
@@ -528,7 +538,26 @@ def main():
 
             Floss = Floss + adaptation_lambda * semantic_loss
 
-   
+        # irm loss
+        if(args.weight_source_irm > 0 or args.weight_target_irm > 0):
+            #pdb.set_trace()
+            Closs_irm = penalty_loss_scales(Floss, scalar_source + scalar_target)
+            Closs_src_irm = sum(Closs_irm[0:len(scalar_source)])
+            Closs_trg_irm = sum(Closs_irm[len(scalar_source):])
+            
+            monitor.update({"Loss/Closs_src_irm": float(Closs_src_irm)})
+            monitor.update({"Loss/Closs_trg_irm": float(Closs_trg_irm)})
+
+        #if(args.weight_target_irm > 0):
+            #Closs_trg_irm = sum(penalty_loss_scales(Floss, scalar_target))
+            #monitor.update({"Loss/Closs_trg_irm": float(Closs_trg_irm)})
+
+        if(args.weight_source_irm > 0):
+            Floss += Closs_src_irm * args.weight_source_irm
+
+        if(args.weight_target_irm > 0):
+            Floss += Closs_trg_irm * args.weight_target_irm
+
         # Floss backward
         Floss.backward()
         optimizer.step()

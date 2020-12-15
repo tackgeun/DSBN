@@ -1,6 +1,7 @@
 import torch.nn as nn
 import math
 import torch.utils.model_zoo as model_zoo
+import torch
 
 __all__ = ['ResNet', 'resnet18', 'resnet34', 'resnet50', 'resnet101', 'resnet152']
 
@@ -138,32 +139,85 @@ class ResNet(nn.Module):
 
         return nn.Sequential(*layers)
 
-    def forward(self, x, with_ft=False):
+    def forward(self, x, with_ft=False, with_scalar=[]):
+        scalars = []
         x = self.conv1(x)
         x = self.bn1(x)
         x = self.relu(x)
         x = self.maxpool(x)
 
+        if(0 in with_scalar):
+            scale = torch.tensor(1.).cuda().requires_grad_()
+            x = x * scale
+            scalars.append(scale)
+
         x = self.layer1(x)
+
+        if(1 in with_scalar):
+            scale = torch.tensor(1.).cuda().requires_grad_()
+            x = x * scale
+            scalars.append(scale)
+
         x = self.layer2(x)
+
+        if(2 in with_scalar):
+            scale = torch.tensor(1.).cuda().requires_grad_()
+            x = x * scale
+            scalars.append(scale)
+
         x = self.layer3(x)
+
+        if(3 in with_scalar):
+            scale = torch.tensor(1.).cuda().requires_grad_()
+            x = x * scale
+            scalars.append(scale)
+
         x = self.layer4(x)
+
+        if(4 in with_scalar):
+            scale = torch.tensor(1.).cuda().requires_grad_()
+            x = x * scale
+            scalars.append(scale)
 
         # x = self.avgpool(x)
         x = x.mean(3).mean(2)  # global average pooling
         x = x.view(x.size(0), -1)
+
+        # last hidden layer
+        if(5 in with_scalar):
+            scale = torch.tensor(1.).cuda().requires_grad_()
+            x = x * scale
+            scalars.append(scale)
+
         if self.in_features != 0:
             x = self.fc1(x)
             feat = x
             x = self.fc2(x)
         else:
-            x = self.fc(x)
-            feat = x
-        if with_ft:
-            return x, feat
-        else:
-            return x
+            ### original dsbn implementation
+            # x = self.fc(x)
+            # feat = x
 
+            feat = x
+            x = self.fc(x)
+
+        # logits
+        if(6 in with_scalar):
+            scale = torch.tensor(1.).cuda().requires_grad_()
+            x = x * scale
+            scalars.append(scale)
+
+        if(with_scalar):
+            if with_ft:
+                return x, feat, scalars
+            else:
+                return x, scalars
+        else:
+            if with_ft:
+                return x, feat
+            else:
+                return x
+    
 
 def resnet18(pretrained=False, **kwargs):
     """Constructs a ResNet-18 model.
