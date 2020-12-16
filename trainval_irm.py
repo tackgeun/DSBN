@@ -112,7 +112,7 @@ def parse_args(args=None, namespace=None):
 
 def penalty_loss_scales(loss, scale):
     grads = autograd.grad(loss, scale, create_graph=True, allow_unused=True)
-    pdb.set_trace()
+    #pdb.set_trace()
     return list(map(lambda x: torch.sum(x ** 2), grads))
 
 def feature_penalty(logits, scalars, loss_func, y):
@@ -514,11 +514,6 @@ def main():
                     pred_t_pseudos.append(pred_t_pseudo)
                 model.train(True)
 
-        # if(args.weight_target_irm > 0):
-        #     Closs_trg_irm = 0
-        #     for pred_t_pseudo, (x_t, f_t, r_t) in zip(pred_t_pseudos, trg_preds):
-        #         Closs_trg_irm += feature_penalty(x_t, r_t, ce_loss, torch.argmax(pred_t_pseudo, 1).detach())
-
         # moving semantic loss
         if args.sm_loss:
             current_srcs_centroids = [src_centroids(f_s, y_s) for src_centroids, (x_s, y_s), (_, f_s) in
@@ -541,7 +536,16 @@ def main():
         # irm loss
         if(args.weight_source_irm > 0 or args.weight_target_irm > 0):
             #pdb.set_trace()
-            Closs_irm = penalty_loss_scales(Floss, scalar_source + scalar_target)
+
+        for (_, y_s), (pred_s, f_s) in zip(src_inputs, src_preds):
+            Closs_src = Closs_src + ce_loss(pred_s, y_s) / float(num_source_domains)   
+
+            Floss_aug = Floss
+            if(args.weight_target_irm > 0):
+                for pred_t_pseudo, (x_t, f_t, r_t) in zip(pred_t_pseudos, trg_preds):
+                    Floss_aug += ce_loss(x_t, torch.argmax(pred_t_pseudo, 1).detach())
+
+            Closs_irm = penalty_loss_scales(Floss_aug, scalar_source + scalar_target)
             Closs_src_irm = sum(Closs_irm[0:len(scalar_source)])
             Closs_trg_irm = sum(Closs_irm[len(scalar_source):])
             
