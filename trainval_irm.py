@@ -561,11 +561,12 @@ def main():
 
                 _scalar = []
                 if(args.weight_source_irm > 0):
-                    _scalar.append(scalar_source)
+                    _scalar += scalar_source
                 if(args.weight_target_irm > 0):
-                    _scalar.append(scalar_target)
+                    _scalar += scalar_target
 
-                Closs_irm = penalty_loss_scales(Floss_aug, _scalar)
+                if(args.weight_source_irm > 0 or args.weight_target_irm > 0):
+                    Closs_irm = penalty_loss_scales(Floss_aug, _scalar)
                 if(args.weight_source_irm > 0):
                     Closs_src_irm = sum(Closs_irm[0:len(scalar_source)])
                     monitor.update({"Loss/Closs_src_irm": float(Closs_src_irm)})
