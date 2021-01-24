@@ -393,7 +393,7 @@ def main():
                                                 gamma=args.adaptation_gamma)
         else:
             adaptation_lambda = args.sm_loss_weight
-            
+
         # init optimizer
         optimizer.zero_grad()
         lr_scheduler(optimizer, i_iter)
@@ -559,12 +559,20 @@ def main():
                     for pred_t_pseudo, (x_t, f_t) in zip(pred_t_pseudos, trg_preds):
                         Floss_aug += ce_loss(x_t, torch.argmax(pred_t_pseudo, 1).detach())
 
-                Closs_irm = penalty_loss_scales(Floss_aug, scalar_source + scalar_target)
-                Closs_src_irm = sum(Closs_irm[0:len(scalar_source)])
-                Closs_trg_irm = sum(Closs_irm[len(scalar_source):])
-                
-                monitor.update({"Loss/Closs_src_irm": float(Closs_src_irm)})
-                monitor.update({"Loss/Closs_trg_irm": float(Closs_trg_irm)})
+                _scalar = []
+                if(args.weight_source_irm > 0):
+                    _scalar.append(scalar_source)
+                if(args.weight_target_irm > 0):
+                    _scalar.append(scalar_target)
+
+                Closs_irm = penalty_loss_scales(Floss_aug, _scalar)
+                if(args.weight_source_irm > 0):
+                    Closs_src_irm = sum(Closs_irm[0:len(scalar_source)])
+                    monitor.update({"Loss/Closs_src_irm": float(Closs_src_irm)})
+                    
+                if(args.weight_target_irm > 0):
+                    Closs_trg_irm = sum(Closs_irm[len(scalar_source):])                
+                    monitor.update({"Loss/Closs_trg_irm": float(Closs_trg_irm)})
 
         if(i_iter > args.warmup_iters):
             if(args.weight_source_irm > 0):
