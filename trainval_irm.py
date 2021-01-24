@@ -64,7 +64,7 @@ def parse_args(args=None, namespace=None):
     parser.add_argument('--manual-seed', type=int, default=0, help='manual random seed')
 
     # train hyper-parameters
-    parser.add_argument('--max-step', help='maximum step', default=5000, type=int)
+    parser.add_argument('--max-step', help='maximum step', default=50000, type=int)
     parser.add_argument('--early-stop-step', help='early stop step', default=5000, type=int)
     parser.add_argument('--warmup-learning-rate', '-wlr', help='warmup learning rate', default=5e-6, type=float)
     parser.add_argument('--warmup-step', type=int, default=20000, help='warm-up iterations')
@@ -83,7 +83,7 @@ def parse_args(args=None, namespace=None):
     parser.add_argument('--weight-irm', type=float, default=0.0)
     parser.add_argument('--iters-active-irm', type=int, default=1)
     parser.add_argument('--layer-irm', type=int, default=6)
-
+    parser.add_argument('--warmup_iters', type=int, default=25)
     # trainval parameters
     parser.add_argument('--adaptation-gamma', help='adaptation gamma value', default=10, type=float)
     parser.add_argument('--adv-loss', help='add domain loss', action='store_true')
@@ -516,12 +516,19 @@ def main():
 
         # moving semantic loss
         if args.sm_loss:
-            current_srcs_centroids = [src_centroids(f_s, y_s) for src_centroids, (x_s, y_s), (_, f_s) in
+            current_srcs_centroids = [src_centroids(pred_s, y_s) for src_centroids, (x_s, y_s), (pred_s, _) in
                                       zip(srcs_centroids, src_inputs, src_preds)]
 
-            current_trgs_centroids = [trg_centroids(f_t, torch.argmax(pred_t_pseudo, 1).detach()) for
-                                      trg_centroids, pred_t_pseudo, (_, f_t) in
+            current_trgs_centroids = [trg_centroids(pred_t, torch.argmax(pred_t_pseudo, 1).detach()) for
+                                      trg_centroids, pred_t_pseudo, (pred_t, _) in
                                       zip(trgs_centroids, pred_t_pseudos, trg_preds)]
+
+            # current_srcs_centroids = [src_centroids(f_s, y_s) for src_centroids, (x_s, y_s), (_, f_s) in
+            #                           zip(srcs_centroids, src_inputs, src_preds)]
+
+            # current_trgs_centroids = [trg_centroids(f_t, torch.argmax(pred_t_pseudo, 1).detach()) for
+            #                           trg_centroids, pred_t_pseudo, (_, f_t) in
+            #                           zip(trgs_centroids, pred_t_pseudos, trg_preds)]
 
             semantic_loss = 0
             for current_trg_centroids in current_trgs_centroids:
@@ -534,33 +541,31 @@ def main():
             Floss = Floss + adaptation_lambda * semantic_loss
 
         # irm loss
-        if(args.weight_source_irm > 0 or args.weight_target_irm > 0):
-            #pdb.set_trace()
+        # if(args.weight_source_irm > 0 or args.weight_target_irm > 0):
+        #     #pdb.set_trace()
 
         for (_, y_s), (pred_s, f_s) in zip(src_inputs, src_preds):
             Closs_src = Closs_src + ce_loss(pred_s, y_s) / float(num_source_domains)   
 
-            Floss_aug = Floss
+            if(i_iter > args.warmup_iters):
+                Floss_aug = Floss
+                if(args.weight_target_irm > 0):
+                    for pred_t_pseudo, (x_t, f_t) in zip(pred_t_pseudos, trg_preds):
+                        Floss_aug += ce_loss(x_t, torch.argmax(pred_t_pseudo, 1).detach())
+
+                Closs_irm = penalty_loss_scales(Floss_aug, scalar_source + scalar_target)
+                Closs_src_irm = sum(Closs_irm[0:len(scalar_source)])
+                Closs_trg_irm = sum(Closs_irm[len(scalar_source):])
+                
+                monitor.update({"Loss/Closs_src_irm": float(Closs_src_irm)})
+                monitor.update({"Loss/Closs_trg_irm": float(Closs_trg_irm)})
+
+        if(i_iter > args.warmup_iters):
+            if(args.weight_source_irm > 0):
+                Floss += Closs_src_irm * args.weight_source_irm
+
             if(args.weight_target_irm > 0):
-                for pred_t_pseudo, (x_t, f_t, r_t) in zip(pred_t_pseudos, trg_preds):
-                    Floss_aug += ce_loss(x_t, torch.argmax(pred_t_pseudo, 1).detach())
-
-            Closs_irm = penalty_loss_scales(Floss_aug, scalar_source + scalar_target)
-            Closs_src_irm = sum(Closs_irm[0:len(scalar_source)])
-            Closs_trg_irm = sum(Closs_irm[len(scalar_source):])
-            
-            monitor.update({"Loss/Closs_src_irm": float(Closs_src_irm)})
-            monitor.update({"Loss/Closs_trg_irm": float(Closs_trg_irm)})
-
-        #if(args.weight_target_irm > 0):
-            #Closs_trg_irm = sum(penalty_loss_scales(Floss, scalar_target))
-            #monitor.update({"Loss/Closs_trg_irm": float(Closs_trg_irm)})
-
-        if(args.weight_source_irm > 0):
-            Floss += Closs_src_irm * args.weight_source_irm
-
-        if(args.weight_target_irm > 0):
-            Floss += Closs_trg_irm * args.weight_target_irm
+                Floss += Closs_trg_irm * args.weight_target_irm
 
         # Floss backward
         Floss.backward()
