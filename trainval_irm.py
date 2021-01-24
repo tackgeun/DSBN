@@ -90,6 +90,7 @@ def parse_args(args=None, namespace=None):
     parser.add_argument('--domain-loss-adjust-factor', help='domain loss factor', default=0.1, type=float)
     parser.add_argument('--sm-loss', help='add moving semantic loss', action='store_true')
     parser.add_argument('--sm-etha', help='sm loss adjust factor', default=1.0, type=float)
+    parser.add_argument('--sm-loss-weight', type=float, default=0.0)
 
     # log and diaplay
     parser.add_argument('--use-tfboard', help='whether use tensorflow tensorboard',
@@ -386,8 +387,13 @@ def main():
                 trg_inputs.append((x_t, None))
 
         current_lr = lr_scheduler.current_lr(i_iter)
-        adaptation_lambda = adaptation_factor((i_iter - args.warmup_step) / float(args.max_step),
-                                              gamma=args.adaptation_gamma)
+
+        if(args.sm_loss_weight == 0):
+            adaptation_lambda = adaptation_factor((i_iter - args.warmup_step) / float(args.max_step),
+                                                gamma=args.adaptation_gamma)
+        else:
+            adaptation_lambda = args.sm_loss_weight
+            
         # init optimizer
         optimizer.zero_grad()
         lr_scheduler(optimizer, i_iter)
